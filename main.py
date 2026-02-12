@@ -21,7 +21,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Polymarket Trading Bot")
     parser.add_argument(
         "--strategy",
-        choices=["value_finder", "midpoint_scalper", "volume_momentum"],
+        choices=["value_finder", "midpoint_scalper", "volume_momentum", "btc_arb"],
         help="Override the strategy from .env",
     )
     parser.add_argument(

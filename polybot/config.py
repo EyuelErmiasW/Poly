@@ -28,6 +28,11 @@ class Config:
     dry_run: bool = os.getenv("DRY_RUN", "true").lower() == "true"
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
+    # BTC arb settings
+    btc_scan_interval: int = int(os.getenv("BTC_SCAN_INTERVAL", "10"))
+    btc_min_edge: float = float(os.getenv("BTC_MIN_EDGE", "0.03"))
+    btc_price_cache_seconds: float = float(os.getenv("BTC_PRICE_CACHE_SECONDS", "2.0"))
+
     def validate(self) -> list[str]:
         """Return a list of configuration errors (empty = valid)."""
         errors = []
