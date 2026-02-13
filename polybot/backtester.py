@@ -159,17 +159,21 @@ def fetch_resolved_short_markets(
 ) -> list[dict]:
     """Fetch resolved 'up or down' markets from Polymarket Gamma API.
 
+    Searches BOTH the /events and /markets endpoints to maximize coverage.
     Returns list of dicts with market info + resolution outcome.
     """
     log.info("Fetching resolved short markets (last %d days)...", days_back)
 
     all_markets = []
+    seen_conditions = set()  # deduplicate across endpoints
+
+    # ── Strategy 1: Search /events endpoint (markets nested under events) ──
     offset = 0
     batch_size = 100
+    empty_batches = 0
 
     while len(all_markets) < max_markets:
         try:
-            # Fetch resolved events
             resp = requests.get(
                 f"{GAMMA_API}/events",
                 params={
@@ -193,90 +197,178 @@ def fetch_resolved_short_markets(
         found_in_batch = 0
         for event in events:
             title = event.get("title", "").lower()
-            if "up or down" not in title:
-                continue
+            # Check both event title AND individual market questions
+            event_matches = "up or down" in title
 
             for m in event.get("markets", []):
                 question = m.get("question", "")
-                end_str = m.get("endDateIso", m.get("endDate", ""))
-
-                # Parse end date
-                end_dt = _parse_date(end_str)
-                if end_dt is None:
-                    continue
-
-                # Check if within our lookback window
-                cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
-                if end_dt < cutoff:
-                    continue
-
-                # Parse outcomes and determine winner
-                outcomes_raw = m.get("outcomes", "[]")
-                try:
-                    outcomes = json.loads(outcomes_raw) if isinstance(outcomes_raw, str) else (outcomes_raw or [])
-                except (ValueError, TypeError):
-                    outcomes = []
-
-                # Get outcome prices to determine winner
-                prices_raw = m.get("outcomePrices", "[]")
-                try:
-                    prices = json.loads(prices_raw) if isinstance(prices_raw, str) else (prices_raw or [])
-                except (ValueError, TypeError):
-                    prices = []
-
-                # The winning outcome has price ~1.0, losing has ~0.0
-                winning_outcome = None
-                if prices and outcomes and len(prices) == len(outcomes):
-                    for i, p in enumerate(prices):
-                        try:
-                            if float(p) > 0.5:
-                                winning_outcome = outcomes[i]
-                                break
-                        except (ValueError, TypeError):
-                            continue
-
-                if winning_outcome is None:
-                    continue
-
-                # Parse asset
                 q_lower = question.lower()
-                if "bitcoin" in q_lower:
-                    asset, symbol = "BTC", "BTCUSDT"
-                elif "ethereum" in q_lower:
-                    asset, symbol = "ETH", "ETHUSDT"
-                elif "solana" in q_lower:
-                    asset, symbol = "SOL", "SOLUSDT"
-                elif "xrp" in q_lower:
-                    asset, symbol = "XRP", "XRPUSDT"
-                else:
+
+                # Match on event title OR market question
+                if not event_matches and "up or down" not in q_lower:
                     continue
 
-                # Parse window duration
-                window_mins = _parse_window_mins(question)
+                parsed = _parse_resolved_market(m, question, days_back)
+                if parsed and parsed["condition_id"] not in seen_conditions:
+                    seen_conditions.add(parsed["condition_id"])
+                    all_markets.append(parsed)
+                    found_in_batch += 1
 
-                all_markets.append({
-                    "question": question,
-                    "asset": asset,
-                    "symbol": symbol,
-                    "end_date": end_str,
-                    "end_dt": end_dt,
-                    "winning_outcome": winning_outcome,
-                    "outcomes": outcomes,
-                    "window_mins": window_mins,
-                    "volume": float(m.get("volumeNum", m.get("volume", 0) or 0)),
-                    "raw": m,
-                })
+        offset += batch_size
+        if found_in_batch == 0:
+            empty_batches += 1
+            if empty_batches >= 3:
+                break
+        else:
+            empty_batches = 0
+
+        time.sleep(0.3)
+
+    log.info("Found %d markets from /events endpoint", len(all_markets))
+
+    # ── Strategy 2: Search /markets endpoint directly ──
+    offset = 0
+    empty_batches = 0
+
+    while len(all_markets) < max_markets:
+        try:
+            resp = requests.get(
+                f"{GAMMA_API}/markets",
+                params={
+                    "limit": batch_size,
+                    "offset": offset,
+                    "closed": True,
+                    "order": "endDate",
+                    "ascending": False,
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            markets = resp.json()
+        except Exception as e:
+            log.warning("Failed to fetch markets at offset %d: %s", offset, e)
+            break
+
+        if not markets:
+            break
+
+        found_in_batch = 0
+        for m in markets:
+            question = m.get("question", "")
+            q_lower = question.lower()
+
+            if "up or down" not in q_lower:
+                continue
+
+            parsed = _parse_resolved_market(m, question, days_back)
+            if parsed and parsed["condition_id"] not in seen_conditions:
+                seen_conditions.add(parsed["condition_id"])
+                all_markets.append(parsed)
                 found_in_batch += 1
 
         offset += batch_size
-        if found_in_batch == 0 and offset > batch_size * 3:
-            break  # stop if no more relevant markets
+        if found_in_batch == 0:
+            empty_batches += 1
+            if empty_batches >= 3:
+                break
+        else:
+            empty_batches = 0
 
-        # Rate limit
         time.sleep(0.3)
 
-    log.info("Found %d resolved short markets", len(all_markets))
+    log.info("Found %d total resolved short markets", len(all_markets))
     return all_markets
+
+
+def _parse_resolved_market(
+    m: dict, question: str, days_back: int,
+) -> dict | None:
+    """Parse a single market dict into our backtest format.
+
+    Returns None if the market doesn't qualify.
+    """
+    end_str = m.get("endDateIso", m.get("endDate", m.get("end_date_iso", "")))
+
+    # Parse end date
+    end_dt = _parse_date(end_str)
+    if end_dt is None:
+        return None
+
+    # Check if within our lookback window
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    if end_dt < cutoff:
+        return None
+
+    # Don't include future markets
+    if end_dt > datetime.now(timezone.utc):
+        return None
+
+    # Parse outcomes and determine winner
+    outcomes_raw = m.get("outcomes", "[]")
+    try:
+        outcomes = json.loads(outcomes_raw) if isinstance(outcomes_raw, str) else (outcomes_raw or [])
+    except (ValueError, TypeError):
+        outcomes = []
+
+    # Get outcome prices to determine winner
+    prices_raw = m.get("outcomePrices", "[]")
+    try:
+        prices = json.loads(prices_raw) if isinstance(prices_raw, str) else (prices_raw or [])
+    except (ValueError, TypeError):
+        prices = []
+
+    # The winning outcome has price ~1.0, losing has ~0.0
+    winning_outcome = None
+    if prices and outcomes and len(prices) == len(outcomes):
+        for i, p in enumerate(prices):
+            try:
+                if float(p) > 0.5:
+                    winning_outcome = outcomes[i]
+                    break
+            except (ValueError, TypeError):
+                continue
+
+    # If outcomePrices didn't work, try the 'outcome' field directly
+    if winning_outcome is None:
+        outcome_field = m.get("outcome", "")
+        if outcome_field in ("Up", "Down"):
+            winning_outcome = outcome_field
+
+    if winning_outcome is None:
+        log.debug("No winning outcome found for: %s", question[:60])
+        return None
+
+    # Parse asset
+    q_lower = question.lower()
+    if "bitcoin" in q_lower or "btc" in q_lower:
+        asset, symbol = "BTC", "BTCUSDT"
+    elif "ethereum" in q_lower or "eth" in q_lower:
+        asset, symbol = "ETH", "ETHUSDT"
+    elif "solana" in q_lower or "sol " in q_lower:
+        asset, symbol = "SOL", "SOLUSDT"
+    elif "xrp" in q_lower:
+        asset, symbol = "XRP", "XRPUSDT"
+    else:
+        return None
+
+    # Parse window duration
+    window_mins = _parse_window_mins(question)
+
+    condition_id = m.get("conditionId", m.get("condition_id", ""))
+
+    return {
+        "condition_id": condition_id,
+        "question": question,
+        "asset": asset,
+        "symbol": symbol,
+        "end_date": end_str,
+        "end_dt": end_dt,
+        "winning_outcome": winning_outcome,
+        "outcomes": outcomes,
+        "window_mins": window_mins,
+        "volume": float(m.get("volumeNum", m.get("volume", 0) or 0)),
+        "raw": m,
+    }
 
 
 def fetch_binance_candles_at(
@@ -509,6 +601,13 @@ class Backtester:
 
         result.total_markets_scanned = len(markets)
         log.info("Backtesting %d resolved markets...", len(markets))
+
+        if not markets:
+            log.warning(
+                "No resolved markets found! Try: --days 14, remove --assets filter, "
+                "or check that Polymarket has closed 'up or down' markets recently."
+            )
+            return result
 
         for i, mkt in enumerate(markets):
             # Simulate: what would the bot have seen N minutes before close?

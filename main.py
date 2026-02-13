@@ -83,6 +83,10 @@ def main() -> None:
         "--lookahead", type=int, default=5,
         help="Minutes before close to simulate signal (default: 5)",
     )
+    bt_parser.add_argument(
+        "--debug", action="store_true",
+        help="Enable debug logging to see API responses",
+    )
 
     args = parser.parse_args()
 
@@ -99,7 +103,8 @@ def main() -> None:
     cfg = Config()
 
     if args.command == "backtest":
-        setup_logging(cfg.log_level)
+        log_level = "DEBUG" if getattr(args, "debug", False) else cfg.log_level
+        setup_logging(log_level)
         _run_backtest(args)
         return
 
