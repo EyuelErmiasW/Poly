@@ -115,47 +115,81 @@ class PolyClient:
         return markets
 
     def fetch_event_markets(self, keywords: list[str], limit: int = 50) -> list[Market]:
-        """Fetch markets from the events endpoint, filtered by keywords in title."""
+        """Fetch markets from both /events and /markets endpoints.
+
+        Searches /events by title keywords AND /markets by question keywords
+        to catch short-window markets that don't appear under event titles.
+        """
+        markets: list[Market] = []
+        seen_ids: set[str] = set()
+        import json as _json
+
+        # 1. Search /events by title (finds daily markets + some short-window)
         url = f"{self.cfg.gamma_host}/events"
         params = {"limit": limit, "active": True, "closed": False, "order": "volume24hr", "ascending": False}
-        resp = requests.get(url, params=params, timeout=15)
-        resp.raise_for_status()
-        markets: list[Market] = []
-        import json as _json
-        for event in resp.json():
-            title = event.get("title", "").lower()
-            if not any(kw.lower() in title for kw in keywords):
-                continue
-            for m in event.get("markets", []):
-                tokens = []
-                clob_ids_raw = m.get("clobTokenIds", "[]")
-                outcomes_raw = m.get("outcomes", "[]")
-                try:
-                    clob_ids = _json.loads(clob_ids_raw) if isinstance(clob_ids_raw, str) else (clob_ids_raw or [])
-                except (ValueError, TypeError):
-                    clob_ids = []
-                try:
-                    outcomes_list = _json.loads(outcomes_raw) if isinstance(outcomes_raw, str) else (outcomes_raw or [])
-                except (ValueError, TypeError):
-                    outcomes_list = []
-                for i, tid in enumerate(clob_ids):
-                    outcome = outcomes_list[i] if i < len(outcomes_list) else f"Outcome {i}"
-                    tokens.append({"token_id": tid, "outcome": outcome})
-                if not tokens:
+        try:
+            resp = requests.get(url, params=params, timeout=15)
+            resp.raise_for_status()
+            for event in resp.json():
+                title = event.get("title", "").lower()
+                if not any(kw.lower() in title for kw in keywords):
                     continue
-                markets.append(
-                    Market(
-                        condition_id=m.get("conditionId", m.get("condition_id", "")),
-                        question=m.get("question", ""),
-                        tokens=tokens,
-                        end_date=m.get("endDateIso", m.get("endDate", "")),
-                        active=m.get("active", True),
-                        volume=float(m.get("volumeNum", m.get("volume", 0) or 0)),
-                        liquidity=float(m.get("liquidityNum", m.get("liquidity", 0) or 0)),
-                    )
-                )
+                for m in event.get("markets", []):
+                    mkt = self._parse_market_dict(m, _json)
+                    if mkt and mkt.condition_id not in seen_ids:
+                        seen_ids.add(mkt.condition_id)
+                        markets.append(mkt)
+        except Exception as e:
+            log.warning("Failed to fetch events: %s", e)
+
+        # 2. Search /markets directly (catches short-window 5-min markets)
+        url = f"{self.cfg.gamma_host}/markets"
+        params = {"limit": 200, "active": True, "closed": False, "order": "endDate", "ascending": True}
+        try:
+            resp = requests.get(url, params=params, timeout=15)
+            resp.raise_for_status()
+            for m in resp.json():
+                question = m.get("question", "").lower()
+                if not any(kw.lower() in question for kw in keywords):
+                    continue
+                mkt = self._parse_market_dict(m, _json)
+                if mkt and mkt.condition_id not in seen_ids:
+                    seen_ids.add(mkt.condition_id)
+                    markets.append(mkt)
+        except Exception as e:
+            log.warning("Failed to fetch markets: %s", e)
+
         log.info("Fetched %d event markets matching %s", len(markets), keywords)
         return markets
+
+    def _parse_market_dict(self, m: dict, _json) -> Market | None:
+        """Parse a raw market dict into a Market object."""
+        tokens = []
+        clob_ids_raw = m.get("clobTokenIds", "[]")
+        outcomes_raw = m.get("outcomes", "[]")
+        try:
+            clob_ids = _json.loads(clob_ids_raw) if isinstance(clob_ids_raw, str) else (clob_ids_raw or [])
+        except (ValueError, TypeError):
+            clob_ids = []
+        try:
+            outcomes_list = _json.loads(outcomes_raw) if isinstance(outcomes_raw, str) else (outcomes_raw or [])
+        except (ValueError, TypeError):
+            outcomes_list = []
+        for i, tid in enumerate(clob_ids):
+            outcome = outcomes_list[i] if i < len(outcomes_list) else f"Outcome {i}"
+            tokens.append({"token_id": tid, "outcome": outcome})
+        if not tokens:
+            return None
+        # Prefer endDate (full timestamp) over endDateIso (date only)
+        return Market(
+            condition_id=m.get("conditionId", m.get("condition_id", "")),
+            question=m.get("question", ""),
+            tokens=tokens,
+            end_date=m.get("endDate", m.get("endDateIso", "")),
+            active=m.get("active", True),
+            volume=float(m.get("volumeNum", m.get("volume", 0) or 0)),
+            liquidity=float(m.get("liquidityNum", m.get("liquidity", 0) or 0)),
+        )
 
     # ── Order book ────────────────────────────────────────────
 

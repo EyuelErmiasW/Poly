@@ -16,10 +16,11 @@ log = logging.getLogger(__name__)
 class Executor:
     """Takes sized signals and submits orders to Polymarket."""
 
-    def __init__(self, client: PolyClient, risk: RiskManager, cfg: Config) -> None:
+    def __init__(self, client: PolyClient, risk: RiskManager, cfg: Config, notifier=None) -> None:
         self.client = client
         self.risk = risk
         self.cfg = cfg
+        self.notifier = notifier
 
     def execute(self, signals: list[Signal]) -> list[dict[str, Any]]:
         """Size, validate, and execute a batch of signals."""
@@ -50,6 +51,15 @@ class Executor:
                     }
                 )
                 self.risk.record_fill(sized)
+                if self.notifier:
+                    self.notifier.notify_order_placed(
+                        side=sized.side,
+                        outcome=sized.opportunity.outcome,
+                        price=sized.price,
+                        size=sized.size,
+                        market=sized.opportunity.market.question,
+                        reason=sized.reason,
+                    )
                 continue
 
             try:
@@ -60,6 +70,15 @@ class Executor:
                     side=sized.side,
                 )
                 self.risk.record_fill(sized)
+                if self.notifier:
+                    self.notifier.notify_order_placed(
+                        side=sized.side,
+                        outcome=sized.opportunity.outcome,
+                        price=sized.price,
+                        size=sized.size,
+                        market=sized.opportunity.market.question,
+                        reason=sized.reason,
+                    )
                 results.append({"status": "submitted", "response": resp})
             except Exception:
                 log.error(

@@ -9,6 +9,7 @@ from polybot.client import PolyClient
 from polybot.config import Config
 from polybot.executor import Executor
 from polybot.market_analyzer import MarketAnalyzer
+from polybot.notifier import DiscordNotifier
 from polybot.risk_manager import RiskManager
 from polybot.strategies.base import Strategy
 from polybot.strategies.midpoint_scalper import MidpointScalper
@@ -49,7 +50,8 @@ class Bot:
         self.analyzer = MarketAnalyzer(self.client)
         self.strategy = build_strategy(cfg)
         self.risk = RiskManager(cfg)
-        self.executor = Executor(self.client, self.risk, cfg)
+        self.notifier = DiscordNotifier(cfg.discord_webhook)
+        self.executor = Executor(self.client, self.risk, cfg, self.notifier)
 
     def run_once(self) -> None:
         """Execute a single scan-evaluate-execute cycle."""
@@ -89,12 +91,17 @@ class Bot:
             self.cfg.max_trade_size,
             self.cfg.max_total_exposure,
         )
+        self.notifier.notify_startup(
+            self.strategy.name, self.cfg.max_trade_size, self.cfg.max_total_exposure,
+        )
 
         while True:
             try:
                 self.run_once()
+                self.notifier.maybe_send_hourly()
             except KeyboardInterrupt:
                 log.info("Shutting down (keyboard interrupt)")
+                self.notifier.notify_shutdown()
                 break
             except Exception:
                 log.error("Cycle error", exc_info=True)
@@ -104,4 +111,5 @@ class Bot:
                 time.sleep(self.cfg.scan_interval)
             except KeyboardInterrupt:
                 log.info("Shutting down (keyboard interrupt)")
+                self.notifier.notify_shutdown()
                 break

@@ -267,7 +267,7 @@ class ShortScalper(Strategy):
             # Parse window duration — ONLY trade <=15 min windows
             window_mins = parse_window_minutes(question)
             if window_mins is None:
-                window_mins = 5  # assume 5-min if can't parse
+                continue  # skip daily markets — no edge
             if window_mins > 15:
                 log.debug("Skipping %s — %d min window (too long)", question[:50], window_mins)
                 continue

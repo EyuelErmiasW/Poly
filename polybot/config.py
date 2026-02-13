@@ -28,6 +28,9 @@ class Config:
     dry_run: bool = os.getenv("DRY_RUN", "true").lower() == "true"
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
+    # Notifications
+    discord_webhook: str = os.getenv("DISCORD_WEBHOOK", "")
+
     # Backtest settings
     backtest_days: int = int(os.getenv("BACKTEST_DAYS", "7"))
     backtest_bet_size: float = float(os.getenv("BACKTEST_BET_SIZE", "1.0"))

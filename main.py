@@ -65,15 +65,19 @@ def main() -> None:
     )
     bt_parser.add_argument(
         "--min-confidence", type=float, default=0.20,
-        help="Minimum confidence threshold (default: 0.20)",
+        help="Minimum confidence for Up/Down trades (default: 0.20)",
+    )
+    bt_parser.add_argument(
+        "--min-edge", type=float, default=0.03,
+        help="Minimum edge for strike-price trades (default: 0.03)",
     )
     bt_parser.add_argument(
         "--max-window", type=int, default=15,
-        help="Maximum market window in minutes (default: 15)",
+        help="Maximum Up/Down market window in minutes (default: 15)",
     )
     bt_parser.add_argument(
         "--assets", nargs="+", default=None,
-        help="Filter to specific assets (e.g. BTC ETH)",
+        help="Filter to specific assets (e.g. BTC ETH SOL)",
     )
     bt_parser.add_argument(
         "--max-markets", type=int, default=500,
@@ -81,7 +85,19 @@ def main() -> None:
     )
     bt_parser.add_argument(
         "--lookahead", type=int, default=5,
-        help="Minutes before close to simulate signal (default: 5)",
+        help="Minutes before close to simulate Up/Down signal (default: 5)",
+    )
+    bt_parser.add_argument(
+        "--lookahead-hours", type=float, default=12,
+        help="Hours before close to simulate strike signal (default: 12)",
+    )
+    bt_parser.add_argument(
+        "--fee-rate", type=float, default=0.0625,
+        help="Polymarket taker fee rate for 15-min crypto markets (default: 0.0625 → ~1.56%% at p=0.50)",
+    )
+    bt_parser.add_argument(
+        "--slippage", type=float, default=0.02,
+        help="Entry price slippage in cents (default: 0.02)",
     )
     bt_parser.add_argument(
         "--debug", action="store_true",
@@ -154,23 +170,30 @@ def _run_backtest(args) -> None:
     from polybot.backtester import Backtester
 
     print("=" * 60)
-    print("  POLYMARKET SHORT MARKET BACKTESTER")
+    print("  POLYMARKET CRYPTO BACKTESTER")
     print("=" * 60)
     print(f"  Days back:        {args.days}")
     print(f"  Bet size:         ${args.bet_size:.2f}")
-    print(f"  Min confidence:   {args.min_confidence:.0%}")
-    print(f"  Max window:       {args.max_window} min")
+    print(f"  Min confidence:   {args.min_confidence:.0%} (Up/Down)")
+    print(f"  Min edge:         {args.min_edge:.0%} (Strike)")
+    print(f"  Max window:       {args.max_window} min (Up/Down)")
     print(f"  Assets:           {args.assets or 'all'}")
-    print(f"  Lookahead:        {args.lookahead} min before close")
+    print(f"  Lookahead:        {args.lookahead} min (Up/Down) / {args.lookahead_hours}h (Strike)")
     print(f"  Max markets:      {args.max_markets}")
+    print(f"  Fee rate:         {args.fee_rate} (~{args.fee_rate * 0.25:.2%} at p=0.50)")
+    print(f"  Slippage:         ${args.slippage:.2f}")
     print("=" * 60)
     print()
 
     bt = Backtester(
         bet_size=args.bet_size,
         min_confidence=args.min_confidence,
+        min_edge=args.min_edge,
         max_window_mins=args.max_window,
         lookahead_mins=args.lookahead,
+        lookahead_hours=args.lookahead_hours,
+        fee_rate=args.fee_rate,
+        slippage=args.slippage,
     )
 
     result = bt.run(
