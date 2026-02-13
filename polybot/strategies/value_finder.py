@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 
-from py_clob_client.constants import BUY
+from polybot.client import BUY
 
 from polybot.market_analyzer import Opportunity
 from polybot.strategies.base import Signal, Strategy
@@ -21,9 +21,9 @@ from polybot.strategies.base import Signal, Strategy
 log = logging.getLogger(__name__)
 
 # Tunables
-MIN_SPREAD = 0.02  # ignore very tight books (no edge)
-MAX_PRICE = 0.35  # only buy cheap outcomes
-MIN_SCORE = 0.10  # minimum score to emit a signal
+MIN_SPREAD = 0.005  # minimum spread to consider (half a cent)
+MAX_PRICE = 0.45  # buy outcomes under 45 cents
+MIN_SCORE = 0.05  # minimum score to emit a signal
 
 
 class ValueFinder(Strategy):

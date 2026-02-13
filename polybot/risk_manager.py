@@ -40,9 +40,12 @@ class RiskManager:
             return None
 
         # Size based on score (higher score -> larger position, up to max)
+        # For small accounts ($1 max trade), always use $1 if signal passed strategy filters
         score = signal.opportunity.score
-        raw_size_usd = self.cfg.max_trade_size * min(score * 2, 1.0)
+        raw_size_usd = self.cfg.max_trade_size * max(min(score * 2, 1.0), 0.5)
         size_usd = min(raw_size_usd, remaining, self.cfg.max_trade_size)
+        # Ensure we hit the minimum viable trade size
+        size_usd = max(size_usd, min(1.0, remaining, self.cfg.max_trade_size))
 
         if size_usd < 1.0:
             log.debug("Computed size too small ($%.2f), skipping", size_usd)

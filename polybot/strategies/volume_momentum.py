@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from py_clob_client.constants import BUY
+from polybot.client import BUY
 
 from polybot.market_analyzer import Opportunity
 from polybot.strategies.base import Signal, Strategy

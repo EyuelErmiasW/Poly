@@ -14,6 +14,8 @@ from polybot.strategies.base import Strategy
 from polybot.strategies.midpoint_scalper import MidpointScalper
 from polybot.strategies.value_finder import ValueFinder
 from polybot.strategies.volume_momentum import VolumeMomentum
+from polybot.strategies.crypto_oracle import CryptoOracle
+from polybot.strategies.fast_crypto import FastCrypto
 
 log = logging.getLogger(__name__)
 
@@ -21,6 +23,8 @@ STRATEGIES: dict[str, type[Strategy]] = {
     "value_finder": ValueFinder,
     "midpoint_scalper": MidpointScalper,
     "volume_momentum": VolumeMomentum,
+    "crypto_oracle": CryptoOracle,
+    "fast_crypto": FastCrypto,
 }
 
 
@@ -48,7 +52,16 @@ class Bot:
     def run_once(self) -> None:
         """Execute a single scan-evaluate-execute cycle."""
         log.info("── Scanning markets (%s strategy) ──", self.strategy.name)
-        opportunities = self.analyzer.scan()
+        if self.strategy.name == "crypto_oracle":
+            opportunities = self.analyzer.scan(
+                event_keywords=["bitcoin", "ethereum", "crypto", "btc", "eth"]
+            )
+        elif self.strategy.name == "fast_crypto":
+            opportunities = self.analyzer.scan(
+                event_keywords=["up or down"]
+            )
+        else:
+            opportunities = self.analyzer.scan()
 
         if not opportunities:
             log.info("No opportunities found this cycle")

@@ -15,7 +15,9 @@ from py_clob_client.clob_types import (
     OrderArgs,
     OrderType,
 )
-from py_clob_client.constants import BUY, SELL
+# Side constants (not exported in newer py-clob-client versions)
+BUY = "BUY"
+SELL = "SELL"
 
 from polybot.config import Config
 
@@ -66,30 +68,90 @@ class PolyClient:
     def fetch_active_markets(self, limit: int = 100) -> list[Market]:
         """Fetch active markets from the Gamma API."""
         url = f"{self.cfg.gamma_host}/markets"
-        params = {"limit": limit, "active": True, "closed": False}
+        params = {"limit": limit, "active": True, "closed": False, "order": "volume24hr", "ascending": False}
         resp = requests.get(url, params=params, timeout=15)
         resp.raise_for_status()
         markets: list[Market] = []
         for m in resp.json():
             tokens = []
-            for t in m.get("tokens", []):
-                tokens.append(
-                    {"token_id": t.get("token_id", ""), "outcome": t.get("outcome", "")}
-                )
+            # Parse clobTokenIds and outcomes (both can be JSON strings)
+            import json as _json
+            clob_ids_raw = m.get("clobTokenIds", "[]")
+            outcomes_raw = m.get("outcomes", "[]")
+            try:
+                clob_ids = _json.loads(clob_ids_raw) if isinstance(clob_ids_raw, str) else (clob_ids_raw or [])
+            except (ValueError, TypeError):
+                clob_ids = []
+            try:
+                outcomes_list = _json.loads(outcomes_raw) if isinstance(outcomes_raw, str) else (outcomes_raw or [])
+            except (ValueError, TypeError):
+                outcomes_list = []
+            for i, tid in enumerate(clob_ids):
+                outcome = outcomes_list[i] if i < len(outcomes_list) else f"Outcome {i}"
+                tokens.append({"token_id": tid, "outcome": outcome})
+            # Fallback: old API format with nested tokens
+            if not tokens:
+                for t in m.get("tokens", []):
+                    tokens.append(
+                        {"token_id": t.get("token_id", ""), "outcome": t.get("outcome", "")}
+                    )
             if not tokens:
                 continue
             markets.append(
                 Market(
-                    condition_id=m.get("condition_id", ""),
+                    condition_id=m.get("conditionId", m.get("condition_id", "")),
                     question=m.get("question", ""),
                     tokens=tokens,
-                    end_date=m.get("end_date_iso", ""),
+                    end_date=m.get("endDateIso", m.get("end_date_iso", "")),
                     active=m.get("active", True),
-                    volume=float(m.get("volume", 0)),
-                    liquidity=float(m.get("liquidity", 0)),
+                    volume=float(m.get("volumeNum", m.get("volume", 0))),
+                    liquidity=float(m.get("liquidityNum", m.get("liquidity", 0))),
                 )
             )
         log.info("Fetched %d active markets", len(markets))
+        return markets
+
+    def fetch_event_markets(self, keywords: list[str], limit: int = 50) -> list[Market]:
+        """Fetch markets from the events endpoint, filtered by keywords in title."""
+        url = f"{self.cfg.gamma_host}/events"
+        params = {"limit": limit, "active": True, "closed": False, "order": "volume24hr", "ascending": False}
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        markets: list[Market] = []
+        import json as _json
+        for event in resp.json():
+            title = event.get("title", "").lower()
+            if not any(kw.lower() in title for kw in keywords):
+                continue
+            for m in event.get("markets", []):
+                tokens = []
+                clob_ids_raw = m.get("clobTokenIds", "[]")
+                outcomes_raw = m.get("outcomes", "[]")
+                try:
+                    clob_ids = _json.loads(clob_ids_raw) if isinstance(clob_ids_raw, str) else (clob_ids_raw or [])
+                except (ValueError, TypeError):
+                    clob_ids = []
+                try:
+                    outcomes_list = _json.loads(outcomes_raw) if isinstance(outcomes_raw, str) else (outcomes_raw or [])
+                except (ValueError, TypeError):
+                    outcomes_list = []
+                for i, tid in enumerate(clob_ids):
+                    outcome = outcomes_list[i] if i < len(outcomes_list) else f"Outcome {i}"
+                    tokens.append({"token_id": tid, "outcome": outcome})
+                if not tokens:
+                    continue
+                markets.append(
+                    Market(
+                        condition_id=m.get("conditionId", m.get("condition_id", "")),
+                        question=m.get("question", ""),
+                        tokens=tokens,
+                        end_date=m.get("endDateIso", m.get("endDate", "")),
+                        active=m.get("active", True),
+                        volume=float(m.get("volumeNum", m.get("volume", 0) or 0)),
+                        liquidity=float(m.get("liquidityNum", m.get("liquidity", 0) or 0)),
+                    )
+                )
+        log.info("Fetched %d event markets matching %s", len(markets), keywords)
         return markets
 
     # ── Order book ────────────────────────────────────────────
@@ -100,15 +162,20 @@ class PolyClient:
         bids = book.bids if hasattr(book, "bids") else []
         asks = book.asks if hasattr(book, "asks") else []
 
-        best_bid = float(bids[0].price) if bids else 0.0
-        best_ask = float(asks[0].price) if asks else 1.0
+        # CLOB returns bids ascending and asks descending — sort properly
+        # Best bid = highest bid, Best ask = lowest ask
+        sorted_bids = sorted(bids, key=lambda b: float(b.price), reverse=True)
+        sorted_asks = sorted(asks, key=lambda a: float(a.price))
+
+        best_bid = float(sorted_bids[0].price) if sorted_bids else 0.0
+        best_ask = float(sorted_asks[0].price) if sorted_asks else 1.0
         midpoint = (best_bid + best_ask) / 2
         spread = best_ask - best_bid
 
         return OrderBookSnapshot(
             token_id=token_id,
-            bids=[{"price": float(b.price), "size": float(b.size)} for b in bids],
-            asks=[{"price": float(a.price), "size": float(a.size)} for a in asks],
+            bids=[{"price": float(b.price), "size": float(b.size)} for b in sorted_bids],
+            asks=[{"price": float(a.price), "size": float(a.size)} for a in sorted_asks],
             midpoint=midpoint,
             spread=spread,
         )

@@ -32,9 +32,12 @@ class MarketAnalyzer:
         self.client = client
         self.min_liquidity = min_liquidity
 
-    def scan(self, limit: int = 100) -> list[Opportunity]:
+    def scan(self, limit: int = 100, event_keywords: list[str] | None = None) -> list[Opportunity]:
         """Fetch markets, pull order books, and return scored opportunities."""
-        markets = self.client.fetch_active_markets(limit=limit)
+        if event_keywords:
+            markets = self.client.fetch_event_markets(event_keywords, limit=limit)
+        else:
+            markets = self.client.fetch_active_markets(limit=limit)
         opportunities: list[Opportunity] = []
 
         for market in markets:
