@@ -19,38 +19,103 @@ def setup_logging(level: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Polymarket Trading Bot")
-    parser.add_argument(
+    sub = parser.add_subparsers(dest="command")
+
+    # ── run (default) ─────────────────────────────────────────
+    run_parser = sub.add_parser("run", help="Run the trading bot")
+    run_parser.add_argument(
         "--strategy",
-        choices=["value_finder", "midpoint_scalper", "volume_momentum"],
+        choices=[
+            "value_finder", "midpoint_scalper", "volume_momentum",
+            "crypto_oracle", "fast_crypto", "short_scalper",
+        ],
         help="Override the strategy from .env",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--dry-run",
         action="store_true",
         default=None,
         help="Force dry-run mode (no real trades)",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--live",
         action="store_true",
         help="Force live mode (real trades — use with caution)",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--once",
         action="store_true",
         help="Run a single cycle then exit",
     )
+    run_parser.add_argument(
+        "--interval",
+        type=int,
+        help="Override scan interval in seconds (default: 15 for short_scalper, 60 for others)",
+    )
+
+    # ── backtest ──────────────────────────────────────────────
+    bt_parser = sub.add_parser("backtest", help="Backtest strategy on historical data")
+    bt_parser.add_argument(
+        "--days", type=int, default=7,
+        help="Days of history to test (default: 7)",
+    )
+    bt_parser.add_argument(
+        "--bet-size", type=float, default=1.0,
+        help="Simulated bet size in USD (default: 1.0)",
+    )
+    bt_parser.add_argument(
+        "--min-confidence", type=float, default=0.20,
+        help="Minimum confidence threshold (default: 0.20)",
+    )
+    bt_parser.add_argument(
+        "--max-window", type=int, default=15,
+        help="Maximum market window in minutes (default: 15)",
+    )
+    bt_parser.add_argument(
+        "--assets", nargs="+", default=None,
+        help="Filter to specific assets (e.g. BTC ETH)",
+    )
+    bt_parser.add_argument(
+        "--max-markets", type=int, default=500,
+        help="Maximum number of markets to test (default: 500)",
+    )
+    bt_parser.add_argument(
+        "--lookahead", type=int, default=5,
+        help="Minutes before close to simulate signal (default: 5)",
+    )
+
     args = parser.parse_args()
+
+    # Default to "run" if no subcommand given
+    if args.command is None:
+        args.command = "run"
+        # Re-parse with run defaults
+        args.strategy = None
+        args.dry_run = None
+        args.live = False
+        args.once = False
+        args.interval = None
 
     cfg = Config()
 
-    # CLI overrides
+    if args.command == "backtest":
+        setup_logging(cfg.log_level)
+        _run_backtest(args)
+        return
+
+    # ── run command ────────────────────────────────────────────
     if args.strategy:
         cfg.strategy = args.strategy
     if args.dry_run:
         cfg.dry_run = True
     elif args.live:
         cfg.dry_run = False
+
+    # Short scalper benefits from faster scanning
+    if args.interval is not None:
+        cfg.scan_interval = args.interval
+    elif cfg.strategy == "short_scalper":
+        cfg.scan_interval = 15  # 15-second cycles for short markets
 
     # Validate
     errors = cfg.validate()
@@ -77,6 +142,39 @@ def main() -> None:
         bot.run_once()
     else:
         bot.run()
+
+
+def _run_backtest(args) -> None:
+    """Run the backtester and print results."""
+    from polybot.backtester import Backtester
+
+    print("=" * 60)
+    print("  POLYMARKET SHORT MARKET BACKTESTER")
+    print("=" * 60)
+    print(f"  Days back:        {args.days}")
+    print(f"  Bet size:         ${args.bet_size:.2f}")
+    print(f"  Min confidence:   {args.min_confidence:.0%}")
+    print(f"  Max window:       {args.max_window} min")
+    print(f"  Assets:           {args.assets or 'all'}")
+    print(f"  Lookahead:        {args.lookahead} min before close")
+    print(f"  Max markets:      {args.max_markets}")
+    print("=" * 60)
+    print()
+
+    bt = Backtester(
+        bet_size=args.bet_size,
+        min_confidence=args.min_confidence,
+        max_window_mins=args.max_window,
+        lookahead_mins=args.lookahead,
+    )
+
+    result = bt.run(
+        days_back=args.days,
+        max_markets=args.max_markets,
+        assets=args.assets,
+    )
+
+    print(result.summary())
 
 
 if __name__ == "__main__":

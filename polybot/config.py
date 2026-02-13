@@ -28,6 +28,11 @@ class Config:
     dry_run: bool = os.getenv("DRY_RUN", "true").lower() == "true"
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
+    # Backtest settings
+    backtest_days: int = int(os.getenv("BACKTEST_DAYS", "7"))
+    backtest_bet_size: float = float(os.getenv("BACKTEST_BET_SIZE", "1.0"))
+    backtest_min_confidence: float = float(os.getenv("BACKTEST_MIN_CONFIDENCE", "0.20"))
+
     def validate(self) -> list[str]:
         """Return a list of configuration errors (empty = valid)."""
         errors = []

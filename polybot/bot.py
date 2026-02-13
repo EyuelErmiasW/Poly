@@ -16,6 +16,7 @@ from polybot.strategies.value_finder import ValueFinder
 from polybot.strategies.volume_momentum import VolumeMomentum
 from polybot.strategies.crypto_oracle import CryptoOracle
 from polybot.strategies.fast_crypto import FastCrypto
+from polybot.strategies.short_scalper import ShortScalper
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ STRATEGIES: dict[str, type[Strategy]] = {
     "volume_momentum": VolumeMomentum,
     "crypto_oracle": CryptoOracle,
     "fast_crypto": FastCrypto,
+    "short_scalper": ShortScalper,
 }
 
 
@@ -56,7 +58,7 @@ class Bot:
             opportunities = self.analyzer.scan(
                 event_keywords=["bitcoin", "ethereum", "crypto", "btc", "eth"]
             )
-        elif self.strategy.name == "fast_crypto":
+        elif self.strategy.name in ("fast_crypto", "short_scalper"):
             opportunities = self.analyzer.scan(
                 event_keywords=["up or down"]
             )
